@@ -26,10 +26,45 @@ static const struct {
     { "sndio", "Add SndIO" },
     { "qsa", "Add QSA" },
 #endif
+    { "jack", "Add JACK" },
     { "port", "Add PortAudio" },
     { "opensl", "Add OpenSL" },
     { "null", "Add Null Output" },
     { "wave", "Add Wave Writer" },
+    { "", "" }
+};
+
+static const struct {
+    const char name[32];
+    const char value[16];
+} speakerModeList[] = {
+    { "Autodetect", "" },
+    { "Mono", "mono" },
+    { "Stereo", "stereo" },
+    { "Quadrophonic", "quad" },
+    { "5.1 Surround (Side)", "surround51" },
+    { "5.1 Surround (Rear)", "surround51rear" },
+    { "6.1 Surround", "surround61" },
+    { "7.1 Surround", "surround71" },
+
+    { "", "" }
+}, sampleTypeList[] = {
+    { "Autodetect", "" },
+    { "8-bit int", "int8" },
+    { "8-bit uint", "uint8" },
+    { "16-bit int", "int16" },
+    { "16-bit uint", "uint16" },
+    { "32-bit int", "int32" },
+    { "32-bit uint", "uint32" },
+    { "32-bit float", "float32" },
+
+    { "", "" }
+}, resamplerList[] = {
+    { "Default", "" },
+    { "Point (low quality, fast)", "point" },
+    { "Linear (basic quality, fast)", "linear" },
+    { "Cubic Spline (good quality)", "cubic" },
+
     { "", "" }
 };
 
@@ -52,6 +87,48 @@ static QString getDefaultConfigName()
         return base +'/'+ fname;
     return fname;
 }
+
+static QString getBaseDataPath()
+{
+#ifdef Q_OS_WIN32
+    QByteArray base = qgetenv("AppData");
+#else
+    QByteArray base = qgetenv("XDG_DATA_HOME");
+    if(base.isEmpty())
+    {
+        base = qgetenv("HOME");
+        if(!base.isEmpty())
+            base += "/.local/share";
+    }
+#endif
+    return base;
+}
+
+static QStringList getAllDataPaths(QString append=QString())
+{
+    QStringList list;
+    list.append(getBaseDataPath());
+#ifdef Q_OS_WIN32
+    // TODO: Common AppData path
+#else
+    QString paths = qgetenv("XDG_DATA_DIRS");
+    if(paths.isEmpty())
+        paths = "/usr/local/share/:/usr/share/";
+    list += paths.split(QChar(':'), QString::SkipEmptyParts);
+#endif
+    QStringList::iterator iter = list.begin();
+    while(iter != list.end())
+    {
+        if(iter->isEmpty())
+            iter = list.erase(iter);
+        else
+        {
+            iter->append(append);
+            iter++;
+        }
+    }
+    return list;
+}
 }
 
 MainWindow::MainWindow(QWidget *parent) :
@@ -66,6 +143,16 @@ MainWindow::MainWindow(QWidget *parent) :
     mReverbBoostValidator(NULL)
 {
     ui->setupUi(this);
+
+    for(int i = 0;speakerModeList[i].name[0];i++)
+        ui->channelConfigCombo->addItem(speakerModeList[i].name);
+    ui->channelConfigCombo->adjustSize();
+    for(int i = 0;sampleTypeList[i].name[0];i++)
+        ui->sampleFormatCombo->addItem(sampleTypeList[i].name);
+    ui->sampleFormatCombo->adjustSize();
+    for(int i = 0;resamplerList[i].name[0];i++)
+        ui->resamplerComboBox->addItem(resamplerList[i].name);
+    ui->resamplerComboBox->adjustSize();
 
     mPeriodSizeValidator = new QIntValidator(64, 8192, this);
     ui->periodSizeEdit->setValidator(mPeriodSizeValidator);
@@ -137,12 +224,19 @@ void MainWindow::loadConfig(const QString &fname)
     ui->sampleFormatCombo->setCurrentIndex(0);
     if(sampletype.isEmpty() == false)
     {
-        for(int i = 1;i < ui->sampleFormatCombo->count();i++)
+        for(int i = 0;sampleTypeList[i].name[i];i++)
         {
-            QString item = ui->sampleFormatCombo->itemText(i);
-            if(item.startsWith(sampletype))
+            if(sampletype == sampleTypeList[i].value)
             {
-                ui->sampleFormatCombo->setCurrentIndex(i);
+                for(int j = 1;j < ui->sampleFormatCombo->count();j++)
+                {
+                    QString item = ui->sampleFormatCombo->itemText(j);
+                    if(item == sampleTypeList[i].name)
+                    {
+                        ui->sampleFormatCombo->setCurrentIndex(j);
+                        break;
+                    }
+                }
                 break;
             }
         }
@@ -152,12 +246,19 @@ void MainWindow::loadConfig(const QString &fname)
     ui->channelConfigCombo->setCurrentIndex(0);
     if(channelconfig.isEmpty() == false)
     {
-        for(int i = 1;i < ui->channelConfigCombo->count();i++)
+        for(int i = 0;speakerModeList[i].name[i];i++)
         {
-            QString item = ui->channelConfigCombo->itemText(i);
-            if(item.startsWith(channelconfig))
+            if(channelconfig == speakerModeList[i].value)
             {
-                ui->channelConfigCombo->setCurrentIndex(i);
+                for(int j = 1;j < ui->channelConfigCombo->count();j++)
+                {
+                    QString item = ui->channelConfigCombo->itemText(j);
+                    if(item == speakerModeList[i].name)
+                    {
+                        ui->channelConfigCombo->setCurrentIndex(j);
+                        break;
+                    }
+                }
                 break;
             }
         }
@@ -180,18 +281,22 @@ void MainWindow::loadConfig(const QString &fname)
     ui->srcSendLineEdit->insert(settings.value("sends").toString());
 
     QString resampler = settings.value("resampler").toString().trimmed();
-    if(resampler.isEmpty())
-        ui->resamplerComboBox->setCurrentIndex(0);
-    else
+    ui->resamplerComboBox->setCurrentIndex(0);
+    if(resampler.isEmpty() == false)
     {
-        for(int i = 1;i < ui->resamplerComboBox->count();i++)
+        for(int i = 0;resamplerList[i].name[i];i++)
         {
-            QString item = ui->resamplerComboBox->itemText(i);
-            int end = item.indexOf(' ');
-            if(end < 0) end = item.size();
-            if(resampler.size() == end && resampler.compare(item.leftRef(end), Qt::CaseInsensitive) == 0)
+            if(resampler == resamplerList[i].value)
             {
-                ui->resamplerComboBox->setCurrentIndex(i);
+                for(int j = 1;j < ui->resamplerComboBox->count();j++)
+                {
+                    QString item = ui->resamplerComboBox->itemText(j);
+                    if(item == resamplerList[i].name)
+                    {
+                        ui->resamplerComboBox->setCurrentIndex(j);
+                        break;
+                    }
+                }
                 break;
             }
         }
@@ -218,9 +323,10 @@ void MainWindow::loadConfig(const QString &fname)
         disabledCpuExts = disabledCpuExts[0].split(QChar(','));
     std::transform(disabledCpuExts.begin(), disabledCpuExts.end(),
                    disabledCpuExts.begin(), std::mem_fun_ref(&QString::trimmed));
-    ui->disableSSECheckBox->setChecked(disabledCpuExts.contains("sse", Qt::CaseInsensitive));
-    ui->disableSSE2CheckBox->setChecked(disabledCpuExts.contains("sse2", Qt::CaseInsensitive));
-    ui->disableNeonCheckBox->setChecked(disabledCpuExts.contains("neon", Qt::CaseInsensitive));
+    ui->enableSSECheckBox->setChecked(!disabledCpuExts.contains("sse", Qt::CaseInsensitive));
+    ui->enableSSE2CheckBox->setChecked(!disabledCpuExts.contains("sse2", Qt::CaseInsensitive));
+    ui->enableSSE41CheckBox->setChecked(!disabledCpuExts.contains("sse4.1", Qt::CaseInsensitive));
+    ui->enableNeonCheckBox->setChecked(!disabledCpuExts.contains("neon", Qt::CaseInsensitive));
 
     if(settings.value("hrtf").toString() == QString())
         ui->hrtfEnableButton->setChecked(true);
@@ -288,15 +394,16 @@ void MainWindow::loadConfig(const QString &fname)
         excludefx = excludefx[0].split(QChar(','));
     std::transform(excludefx.begin(), excludefx.end(),
                    excludefx.begin(), std::mem_fun_ref(&QString::trimmed));
-    ui->disableEaxReverbCheck->setChecked(excludefx.contains("eaxreverb", Qt::CaseInsensitive));
-    ui->disableStdReverbCheck->setChecked(excludefx.contains("reverb", Qt::CaseInsensitive));
-    ui->disableChorusCheck->setChecked(excludefx.contains("chorus", Qt::CaseInsensitive));
-    ui->disableDistortionCheck->setChecked(excludefx.contains("distortion", Qt::CaseInsensitive));
-    ui->disableEchoCheck->setChecked(excludefx.contains("echo", Qt::CaseInsensitive));
-    ui->disableEqualizerCheck->setChecked(excludefx.contains("equalizer", Qt::CaseInsensitive));
-    ui->disableFlangerCheck->setChecked(excludefx.contains("flanger", Qt::CaseInsensitive));
-    ui->disableModulatorCheck->setChecked(excludefx.contains("modulator", Qt::CaseInsensitive));
-    ui->disableDedicatedCheck->setChecked(excludefx.contains("dedicated", Qt::CaseInsensitive));
+    ui->enableEaxReverbCheck->setChecked(!excludefx.contains("eaxreverb", Qt::CaseInsensitive));
+    ui->enableStdReverbCheck->setChecked(!excludefx.contains("reverb", Qt::CaseInsensitive));
+    ui->enableChorusCheck->setChecked(!excludefx.contains("chorus", Qt::CaseInsensitive));
+    ui->enableCompressorCheck->setChecked(!excludefx.contains("compressor", Qt::CaseInsensitive));
+    ui->enableDistortionCheck->setChecked(!excludefx.contains("distortion", Qt::CaseInsensitive));
+    ui->enableEchoCheck->setChecked(!excludefx.contains("echo", Qt::CaseInsensitive));
+    ui->enableEqualizerCheck->setChecked(!excludefx.contains("equalizer", Qt::CaseInsensitive));
+    ui->enableFlangerCheck->setChecked(!excludefx.contains("flanger", Qt::CaseInsensitive));
+    ui->enableModulatorCheck->setChecked(!excludefx.contains("modulator", Qt::CaseInsensitive));
+    ui->enableDedicatedCheck->setChecked(!excludefx.contains("dedicated", Qt::CaseInsensitive));
 }
 
 void MainWindow::saveCurrentConfig()
@@ -327,15 +434,27 @@ void MainWindow::saveConfig(const QString &fname) const
     }
 
     QString str = ui->sampleFormatCombo->currentText();
-    str.truncate(str.indexOf('-'));
-    settings.setValue("sample-type", str.trimmed());
+    for(int i = 0;sampleTypeList[i].name[0];i++)
+    {
+        if(str == sampleTypeList[i].name)
+        {
+            settings.setValue("sample-type", sampleTypeList[i].value);
+            break;
+        }
+    }
 
     str = ui->channelConfigCombo->currentText();
-    str.truncate(str.indexOf('-'));
-    settings.setValue("channels", str.trimmed());
+    for(int i = 0;speakerModeList[i].name[0];i++)
+    {
+        if(str == speakerModeList[i].name)
+        {
+            settings.setValue("channels", speakerModeList[i].value);
+            break;
+        }
+    }
 
     uint rate = ui->sampleRateCombo->currentText().toUInt();
-    if(rate == 0)
+    if(!(rate > 0))
         settings.setValue("frequency", QString());
     else
         settings.setValue("frequency", rate);
@@ -346,20 +465,24 @@ void MainWindow::saveConfig(const QString &fname) const
     settings.setValue("sources", ui->srcCountLineEdit->text());
     settings.setValue("slots", ui->effectSlotLineEdit->text());
 
-    if(ui->resamplerComboBox->currentIndex() == 0)
-        settings.setValue("resampler", QString());
-    else
+    str = ui->resamplerComboBox->currentText();
+    for(int i = 0;resamplerList[i].name[0];i++)
     {
-        str = ui->resamplerComboBox->currentText();
-        settings.setValue("resampler", str.split(' ').first().toLower());
+        if(str == resamplerList[i].name)
+        {
+            settings.setValue("resampler", resamplerList[i].value);
+            break;
+        }
     }
 
     QStringList strlist;
-    if(ui->disableSSECheckBox->isChecked())
+    if(!ui->enableSSECheckBox->isChecked())
         strlist.append("sse");
-    if(ui->disableSSE2CheckBox->isChecked())
+    if(!ui->enableSSE2CheckBox->isChecked())
         strlist.append("sse2");
-    if(ui->disableNeonCheckBox->isChecked())
+    if(!ui->enableSSE41CheckBox->isChecked())
+        strlist.append("sse4.1");
+    if(!ui->enableNeonCheckBox->isChecked())
         strlist.append("neon");
     settings.setValue("disable-cpu-exts", strlist.join(QChar(',')));
 
@@ -410,23 +533,25 @@ void MainWindow::saveConfig(const QString &fname) const
         settings.setValue("reverb/boost", ui->reverbBoostEdit->text());
 
     strlist.clear();
-    if(ui->disableEaxReverbCheck->isChecked())
+    if(!ui->enableEaxReverbCheck->isChecked())
         strlist.append("eaxreverb");
-    if(ui->disableStdReverbCheck->isChecked())
+    if(!ui->enableStdReverbCheck->isChecked())
         strlist.append("reverb");
-    if(ui->disableChorusCheck->isChecked())
+    if(!ui->enableChorusCheck->isChecked())
         strlist.append("chorus");
-    if(ui->disableDistortionCheck->isChecked())
+    if(!ui->enableDistortionCheck->isChecked())
         strlist.append("distortion");
-    if(ui->disableEchoCheck->isChecked())
+    if(!ui->enableCompressorCheck->isChecked())
+        strlist.append("compressor");
+    if(!ui->enableEchoCheck->isChecked())
         strlist.append("echo");
-    if(ui->disableEqualizerCheck->isChecked())
+    if(!ui->enableEqualizerCheck->isChecked())
         strlist.append("equalizer");
-    if(ui->disableFlangerCheck->isChecked())
+    if(!ui->enableFlangerCheck->isChecked())
         strlist.append("flanger");
-    if(ui->disableModulatorCheck->isChecked())
+    if(!ui->enableModulatorCheck->isChecked())
         strlist.append("modulator");
-    if(ui->disableDedicatedCheck->isChecked())
+    if(!ui->enableDedicatedCheck->isChecked())
         strlist.append("dedicated");
     settings.setValue("excludefx", strlist.join(QChar(',')));
 
@@ -484,10 +609,36 @@ void MainWindow::updatePeriodCountSlider()
 
 void MainWindow::addHrtfFile()
 {
-    QStringList fnames = QFileDialog::getOpenFileNames(this, tr("Select Files"), QString(),
+    const QStringList datapaths = getAllDataPaths("/openal/hrtf");
+    QStringList fnames = QFileDialog::getOpenFileNames(this, tr("Select Files"),
+                                                       datapaths.empty() ? QString() : datapaths[0],
                                                        "HRTF Datasets(*.mhr);;All Files(*.*)");
     if(fnames.isEmpty() == false)
-        ui->hrtfFileList->addItems(fnames);
+    {
+        for(QStringList::iterator iter = fnames.begin();iter != fnames.end();iter++)
+        {
+            QStringList::const_iterator path = datapaths.constBegin();
+            for(;path != datapaths.constEnd();path++)
+            {
+                QDir hrtfdir(*path);
+                if(!hrtfdir.isAbsolute())
+                    continue;
+
+                const QString relname = hrtfdir.relativeFilePath(*iter);
+                if(!relname.startsWith(".."))
+                {
+                    // If filename is within this path, use the relative pathname
+                    ui->hrtfFileList->addItem(relname);
+                    break;
+                }
+            }
+            if(path == datapaths.constEnd())
+            {
+                // Filename is not within any data path, use the absolute pathname
+                ui->hrtfFileList->addItem(*iter);
+            }
+        }
+    }
 }
 
 void MainWindow::removeHrtfFile()

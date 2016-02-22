@@ -31,16 +31,6 @@
 #include <SLES/OpenSLES_Android.h>
 
 /* Helper macros */
-#define SLObjectItf_Realize(a,b)        ((*(a))->Realize((a),(b)))
-#define SLObjectItf_GetInterface(a,b,c) ((*(a))->GetInterface((a),(b),(c)))
-#define SLObjectItf_Destroy(a)          ((*(a))->Destroy((a)))
-
-#define SLEngineItf_CreateOutputMix(a,b,c,d,e)       ((*(a))->CreateOutputMix((a),(b),(c),(d),(e)))
-#define SLEngineItf_CreateAudioPlayer(a,b,c,d,e,f,g) ((*(a))->CreateAudioPlayer((a),(b),(c),(d),(e),(f),(g)))
-
-#define SLPlayItf_SetPlayState(a,b) ((*(a))->SetPlayState((a),(b)))
-
-/* Should start using these generic callers instead of the name-specific ones above. */
 #define VCALL(obj, func)  ((*(obj))->func((obj), EXTRACT_VCALL_ARGS
 #define VCALL0(obj, func)  ((*(obj))->func((obj) EXTRACT_VCALL_ARGS
 
@@ -66,6 +56,7 @@ typedef struct {
 
 static const ALCchar opensl_device[] = "OpenSL";
 
+
 static SLuint32 GetChannelMask(enum DevFmtChannels chans)
 {
     switch(chans)
@@ -76,7 +67,10 @@ static SLuint32 GetChannelMask(enum DevFmtChannels chans)
                                 SL_SPEAKER_BACK_LEFT|SL_SPEAKER_BACK_RIGHT;
         case DevFmtX51: return SL_SPEAKER_FRONT_LEFT|SL_SPEAKER_FRONT_RIGHT|
                                SL_SPEAKER_FRONT_CENTER|SL_SPEAKER_LOW_FREQUENCY|
-                               SL_SPEAKER_BACK_LEFT|SL_SPEAKER_BACK_RIGHT;
+                               SL_SPEAKER_SIDE_LEFT|SL_SPEAKER_SIDE_RIGHT;
+        case DevFmtX51Rear: return SL_SPEAKER_FRONT_LEFT|SL_SPEAKER_FRONT_RIGHT|
+                                   SL_SPEAKER_FRONT_CENTER|SL_SPEAKER_LOW_FREQUENCY|
+                                   SL_SPEAKER_BACK_LEFT|SL_SPEAKER_BACK_RIGHT;
         case DevFmtX61: return SL_SPEAKER_FRONT_LEFT|SL_SPEAKER_FRONT_RIGHT|
                                SL_SPEAKER_FRONT_CENTER|SL_SPEAKER_LOW_FREQUENCY|
                                SL_SPEAKER_BACK_CENTER|
@@ -85,9 +79,7 @@ static SLuint32 GetChannelMask(enum DevFmtChannels chans)
                                SL_SPEAKER_FRONT_CENTER|SL_SPEAKER_LOW_FREQUENCY|
                                SL_SPEAKER_BACK_LEFT|SL_SPEAKER_BACK_RIGHT|
                                SL_SPEAKER_SIDE_LEFT|SL_SPEAKER_SIDE_RIGHT;
-        case DevFmtX51Side: return SL_SPEAKER_FRONT_LEFT|SL_SPEAKER_FRONT_RIGHT|
-                                   SL_SPEAKER_FRONT_CENTER|SL_SPEAKER_LOW_FREQUENCY|
-                                   SL_SPEAKER_SIDE_LEFT|SL_SPEAKER_SIDE_RIGHT;
+        case DevFmtBFormat3D: break;
     }
     return 0;
 }
@@ -139,16 +131,13 @@ static void opensl_callback(SLAndroidSimpleBufferQueueItf bq, void *context)
     ALvoid *buf;
     SLresult result;
 
-    if(data->buffer != NULL)
-    {
-        buf = (ALbyte*)data->buffer + data->curBuffer*data->bufferSize;
-        aluMixData(Device, buf, data->bufferSize/data->frameSize);
+    buf = (ALbyte*)data->buffer + data->curBuffer*data->bufferSize;
+    aluMixData(Device, buf, data->bufferSize/data->frameSize);
 
-        result = (*bq)->Enqueue(bq, buf, data->bufferSize);
-        PRINTERR(result, "bq->Enqueue");
+    result = VCALL(bq,Enqueue)(buf, data->bufferSize);
+    PRINTERR(result, "bq->Enqueue");
 
-        data->curBuffer = (data->curBuffer+1) % Device->NumUpdates;
-    }
+    data->curBuffer = (data->curBuffer+1) % Device->NumUpdates;
 }
 
 
@@ -171,33 +160,33 @@ static ALCenum opensl_open_playback(ALCdevice *Device, const ALCchar *deviceName
     PRINTERR(result, "slCreateEngine");
     if(SL_RESULT_SUCCESS == result)
     {
-        result = SLObjectItf_Realize(data->engineObject, SL_BOOLEAN_FALSE);
+        result = VCALL(data->engineObject,Realize)(SL_BOOLEAN_FALSE);
         PRINTERR(result, "engine->Realize");
     }
     if(SL_RESULT_SUCCESS == result)
     {
-        result = SLObjectItf_GetInterface(data->engineObject, SL_IID_ENGINE, &data->engine);
+        result = VCALL(data->engineObject,GetInterface)(SL_IID_ENGINE, &data->engine);
         PRINTERR(result, "engine->GetInterface");
     }
     if(SL_RESULT_SUCCESS == result)
     {
-        result = SLEngineItf_CreateOutputMix(data->engine, &data->outputMix, 0, NULL, NULL);
+        result = VCALL(data->engine,CreateOutputMix)(&data->outputMix, 0, NULL, NULL);
         PRINTERR(result, "engine->CreateOutputMix");
     }
     if(SL_RESULT_SUCCESS == result)
     {
-        result = SLObjectItf_Realize(data->outputMix, SL_BOOLEAN_FALSE);
+        result = VCALL(data->outputMix,Realize)(SL_BOOLEAN_FALSE);
         PRINTERR(result, "outputMix->Realize");
     }
 
     if(SL_RESULT_SUCCESS != result)
     {
         if(data->outputMix != NULL)
-            SLObjectItf_Destroy(data->outputMix);
+            VCALL0(data->outputMix,Destroy)();
         data->outputMix = NULL;
 
         if(data->engineObject != NULL)
-            SLObjectItf_Destroy(data->engineObject);
+            VCALL0(data->engineObject,Destroy)();
         data->engineObject = NULL;
         data->engine = NULL;
 
@@ -205,7 +194,7 @@ static ALCenum opensl_open_playback(ALCdevice *Device, const ALCchar *deviceName
         return ALC_INVALID_VALUE;
     }
 
-    Device->DeviceName = strdup(deviceName);
+    al_string_copy_cstr(&Device->DeviceName, deviceName);
     Device->ExtraData = data;
 
     return ALC_NO_ERROR;
@@ -217,43 +206,18 @@ static void opensl_close_playback(ALCdevice *Device)
     osl_data *data = Device->ExtraData;
 
     if(data->bufferQueueObject != NULL)
-        SLObjectItf_Destroy(data->bufferQueueObject);
+        VCALL0(data->bufferQueueObject,Destroy)();
     data->bufferQueueObject = NULL;
 
-    SLObjectItf_Destroy(data->outputMix);
+    VCALL0(data->outputMix,Destroy)();
     data->outputMix = NULL;
 
-    SLObjectItf_Destroy(data->engineObject);
+    VCALL0(data->engineObject,Destroy)();
     data->engineObject = NULL;
     data->engine = NULL;
 
     free(data);
     Device->ExtraData = NULL;
-}
-
-static SLuint32 convertSampleRate(SLuint32 sr)
-{
-    switch(sr){
-    case 8000:
-        return SL_SAMPLINGRATE_8;
-    case 11025:
-        return SL_SAMPLINGRATE_11_025;
-    case 12000:
-        return SL_SAMPLINGRATE_12;
-    case 16000:
-        return SL_SAMPLINGRATE_16;
-    case 22050:
-        return SL_SAMPLINGRATE_22_05;
-    case 24000:
-        return SL_SAMPLINGRATE_24;
-    case 32000:
-        return SL_SAMPLINGRATE_32;
-    case 44100:
-        return SL_SAMPLINGRATE_44_1;
-    case 48000:
-        return SL_SAMPLINGRATE_48;
-  }
-  return -1;
 }
 
 static ALCboolean opensl_reset_playback(ALCdevice *Device)
@@ -267,18 +231,15 @@ static ALCboolean opensl_reset_playback(ALCdevice *Device)
     SLInterfaceID id;
     SLboolean req;
     SLresult result;
-    SLuint32 sampleRate;
 
 
+    Device->UpdateSize = (ALuint64)Device->UpdateSize * 44100 / Device->Frequency;
+    Device->UpdateSize = Device->UpdateSize * Device->NumUpdates / 2;
+    Device->NumUpdates = 2;
+
+    Device->Frequency = 44100;
     Device->FmtChans = DevFmtStereo;
     Device->FmtType = DevFmtShort;
-
-    sampleRate = convertSampleRate(Device->Frequency);
-    if(sampleRate == -1)
-    {
-        sampleRate = SL_SAMPLINGRATE_44_1;
-        Device->Frequency = 44100;
-    }
 
     SetDefaultWFXChannelOrder(Device);
 
@@ -291,7 +252,7 @@ static ALCboolean opensl_reset_playback(ALCdevice *Device)
 
     format_pcm.formatType = SL_DATAFORMAT_PCM;
     format_pcm.numChannels = ChannelsFromDevFmt(Device->FmtChans);
-    format_pcm.samplesPerSec = sampleRate;
+    format_pcm.samplesPerSec = Device->Frequency * 1000;
     format_pcm.bitsPerSample = BytesFromDevFmt(Device->FmtType) * 8;
     format_pcm.containerSize = format_pcm.bitsPerSample;
     format_pcm.channelMask = GetChannelMask(Device->FmtChans);
@@ -308,21 +269,21 @@ static ALCboolean opensl_reset_playback(ALCdevice *Device)
 
 
     if(data->bufferQueueObject != NULL)
-        SLObjectItf_Destroy(data->bufferQueueObject);
+        VCALL0(data->bufferQueueObject,Destroy)();
     data->bufferQueueObject = NULL;
 
-    result = SLEngineItf_CreateAudioPlayer(data->engine, &data->bufferQueueObject, &audioSrc, &audioSnk, 1, &id, &req);
+    result = VCALL(data->engine,CreateAudioPlayer)(&data->bufferQueueObject, &audioSrc, &audioSnk, 1, &id, &req);
     PRINTERR(result, "engine->CreateAudioPlayer");
     if(SL_RESULT_SUCCESS == result)
     {
-        result = SLObjectItf_Realize(data->bufferQueueObject, SL_BOOLEAN_FALSE);
+        result = VCALL(data->bufferQueueObject,Realize)(SL_BOOLEAN_FALSE);
         PRINTERR(result, "bufferQueue->Realize");
     }
 
     if(SL_RESULT_SUCCESS != result)
     {
         if(data->bufferQueueObject != NULL)
-            SLObjectItf_Destroy(data->bufferQueueObject);
+            VCALL0(data->bufferQueueObject,Destroy)();
         data->bufferQueueObject = NULL;
 
         return ALC_FALSE;
@@ -339,15 +300,13 @@ static ALCboolean opensl_start_playback(ALCdevice *Device)
     SLresult result;
     ALuint i;
 
-    result = SLObjectItf_GetInterface(data->bufferQueueObject, SL_IID_BUFFERQUEUE, &bufferQueue);
+    result = VCALL(data->bufferQueueObject,GetInterface)(SL_IID_BUFFERQUEUE, &bufferQueue);
     PRINTERR(result, "bufferQueue->GetInterface");
-
     if(SL_RESULT_SUCCESS == result)
     {
-        result = (*bufferQueue)->RegisterCallback(bufferQueue, opensl_callback, Device);
+        result = VCALL(bufferQueue,RegisterCallback)(opensl_callback, Device);
         PRINTERR(result, "bufferQueue->RegisterCallback");
     }
-
     if(SL_RESULT_SUCCESS == result)
     {
         data->frameSize = FrameSizeFromDevFmt(Device->FmtChans, Device->FmtType);
@@ -359,39 +318,32 @@ static ALCboolean opensl_start_playback(ALCdevice *Device)
             PRINTERR(result, "calloc");
         }
     }
-
-    if(SL_RESULT_SUCCESS == result)
-    {
-        result = VCALL0(bufferQueue,Clear)();
-        PRINTERR(result, "bufferQueue->Clear");
-    }
-
     /* enqueue the first buffer to kick off the callbacks */
     for(i = 0;i < Device->NumUpdates;i++)
     {
         if(SL_RESULT_SUCCESS == result)
         {
             ALvoid *buf = (ALbyte*)data->buffer + i*data->bufferSize;
-            result = (*bufferQueue)->Enqueue(bufferQueue, buf, data->bufferSize);
+            result = VCALL(bufferQueue,Enqueue)(buf, data->bufferSize);
             PRINTERR(result, "bufferQueue->Enqueue");
         }
     }
     data->curBuffer = 0;
     if(SL_RESULT_SUCCESS == result)
     {
-        result = SLObjectItf_GetInterface(data->bufferQueueObject, SL_IID_PLAY, &player);
+        result = VCALL(data->bufferQueueObject,GetInterface)(SL_IID_PLAY, &player);
         PRINTERR(result, "bufferQueue->GetInterface");
     }
     if(SL_RESULT_SUCCESS == result)
     {
-        result = SLPlayItf_SetPlayState(player, SL_PLAYSTATE_PLAYING);
+        result = VCALL(player,SetPlayState)(SL_PLAYSTATE_PLAYING);
         PRINTERR(result, "player->SetPlayState");
     }
 
     if(SL_RESULT_SUCCESS != result)
     {
         if(data->bufferQueueObject != NULL)
-            SLObjectItf_Destroy(data->bufferQueueObject);
+            VCALL0(data->bufferQueueObject,Destroy)();
         data->bufferQueueObject = NULL;
 
         free(data->buffer);
@@ -409,15 +361,23 @@ static void opensl_stop_playback(ALCdevice *Device)
 {
     osl_data *data = Device->ExtraData;
     SLPlayItf player;
+    SLAndroidSimpleBufferQueueItf bufferQueue;
     SLresult result;
 
     result = VCALL(data->bufferQueueObject,GetInterface)(SL_IID_PLAY, &player);
     PRINTERR(result, "bufferQueue->GetInterface");
-
     if(SL_RESULT_SUCCESS == result)
     {
         result = VCALL(player,SetPlayState)(SL_PLAYSTATE_STOPPED);
         PRINTERR(result, "player->SetPlayState");
+    }
+
+    result = VCALL(data->bufferQueueObject,GetInterface)(SL_IID_BUFFERQUEUE, &bufferQueue);
+    PRINTERR(result, "bufferQueue->GetInterface");
+    if(SL_RESULT_SUCCESS == result)
+    {
+        result = VCALL0(bufferQueue,Clear)();
+        PRINTERR(result, "bufferQueue->Clear");
     }
 
     free(data->buffer);
@@ -437,8 +397,7 @@ static const BackendFuncs opensl_funcs = {
     NULL,
     NULL,
     NULL,
-    NULL,
-    ALCdevice_GetLatencyDefault
+    NULL
 };
 
 

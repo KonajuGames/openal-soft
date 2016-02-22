@@ -98,12 +98,6 @@ typedef void ALCvoid;
 /** Context attribute: <int> requested Stereo Sources. */
 #define ALC_STEREO_SOURCES                       0x1011
 
-/** Context attribute: <int> update buffer size in samples. */
-#define ALC_UPDATE_SIZE                          0x1014
-
-/** Context attribute: <int> number of update buffers. */
-#define ALC_UPDATE_BUFFERS                       0x1015
-
 /** No error. */
 #define ALC_NO_ERROR                             0
 

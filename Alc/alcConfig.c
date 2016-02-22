@@ -13,8 +13,8 @@
  *
  * You should have received a copy of the GNU Library General Public
  *  License along with this library; if not, write to the
- *  Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- *  Boston, MA  02111-1307, USA.
+ *  Free Software Foundation, Inc.,
+ *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  * Or go to http://www.gnu.org/copyleft/lgpl.html
  */
 
@@ -32,12 +32,14 @@
 #include <stdio.h>
 #include <ctype.h>
 #include <string.h>
-
-#include "alMain.h"
-
 #ifdef _WIN32_IE
 #include <shlobj.h>
 #endif
+
+#include "alMain.h"
+#include "compat.h"
+#include "bool.h"
+
 
 typedef struct ConfigEntry {
     char *key;
@@ -48,10 +50,8 @@ typedef struct ConfigBlock {
     ConfigEntry *entries;
     unsigned int entryCount;
 } ConfigBlock;
-
 static ConfigBlock cfgBlock;
 
-static char buffer[1024];
 
 static char *lstrip(char *line)
 {
@@ -69,23 +69,140 @@ static char *rstrip(char *line)
     return line;
 }
 
+static int readline(FILE *f, char **output, size_t *maxlen)
+{
+    size_t len = 0;
+    int c;
+
+    while((c=fgetc(f)) != EOF && (c == '\r' || c == '\n'))
+        ;
+    if(c == EOF)
+        return 0;
+
+    do {
+        if(len+1 >= *maxlen)
+        {
+            void *temp = NULL;
+            size_t newmax;
+
+            newmax = (*maxlen ? (*maxlen)<<1 : 32);
+            if(newmax > *maxlen)
+                temp = realloc(*output, newmax);
+            if(!temp)
+            {
+                ERR("Failed to realloc "SZFMT" bytes from "SZFMT"!\n", newmax, *maxlen);
+                return 0;
+            }
+
+            *output = temp;
+            *maxlen = newmax;
+        }
+        (*output)[len++] = c;
+        (*output)[len] = '\0';
+    } while((c=fgetc(f)) != EOF && c != '\r' && c != '\n');
+
+    return 1;
+}
+
+
+static char *expdup(const char *str)
+{
+    char *output = NULL;
+    size_t maxlen = 0;
+    size_t len = 0;
+
+    while(*str != '\0')
+    {
+        const char *addstr;
+        size_t addstrlen;
+        size_t i;
+
+        if(str[0] != '$')
+        {
+            const char *next = strchr(str, '$');
+            addstr = str;
+            addstrlen = next ? (size_t)(next-str) : strlen(str);
+
+            str += addstrlen;
+        }
+        else
+        {
+            str++;
+            if(*str == '$')
+            {
+                const char *next = strchr(str+1, '$');
+                addstr = str;
+                addstrlen = next ? (size_t)(next-str) : strlen(str);
+
+                str += addstrlen;
+            }
+            else
+            {
+                bool hasbraces;
+                char envname[1024];
+                size_t k = 0;
+
+                hasbraces = (*str == '{');
+                if(hasbraces) str++;
+
+                while((isalnum(*str) || *str == '_') && k < sizeof(envname)-1)
+                    envname[k++] = *(str++);
+                envname[k++] = '\0';
+
+                if(hasbraces && *str != '}')
+                    continue;
+
+                if(hasbraces) str++;
+                if((addstr=getenv(envname)) == NULL)
+                    continue;
+                addstrlen = strlen(addstr);
+            }
+        }
+        if(addstrlen == 0)
+            continue;
+
+        if(addstrlen >= maxlen-len)
+        {
+            void *temp = NULL;
+            size_t newmax;
+
+            newmax = len+addstrlen+1;
+            if(newmax > maxlen)
+                temp = realloc(output, newmax);
+            if(!temp)
+            {
+                ERR("Failed to realloc "SZFMT" bytes from "SZFMT"!\n", newmax, maxlen);
+                return output;
+            }
+
+            output = temp;
+            maxlen = newmax;
+        }
+
+        for(i = 0;i < addstrlen;i++)
+            output[len++] = addstr[i];
+        output[len] = '\0';
+    }
+
+    return output ? output : calloc(1, 1);
+}
+
+
 static void LoadConfigFromFile(FILE *f)
 {
     char curSection[128] = "";
+    char *buffer = NULL;
+    size_t maxlen = 0;
     ConfigEntry *ent;
 
-    while(fgets(buffer, sizeof(buffer), f))
+    while(readline(f, &buffer, &maxlen))
     {
         char *line, *comment;
         char key[256] = "";
         char value[256] = "";
 
         comment = strchr(buffer, '#');
-        if(comment)
-        {
-            *(comment++) = 0;
-            comment = rstrip(lstrip(comment));
-        }
+        if(comment) *(comment++) = 0;
 
         line = rstrip(lstrip(buffer));
         if(!line[0])
@@ -123,26 +240,26 @@ static void LoadConfigFromFile(FILE *f)
              * manually. */
             if(strcmp(value, "\"\"") == 0 || strcmp(value, "''") == 0)
                 value[0] = 0;
-         }
-         else if(sscanf(line, "%255[^=] %255[=]", key, value) == 2)
-         {
-             /* Special case for 'key =' */
-             value[0] = 0;
-         }
-         else
-         {
-             ERR("config parse error: malformed option line: \"%s\"\n\n", line);
-             continue;
-         }
-         rstrip(key);
+        }
+        else if(sscanf(line, "%255[^=] %255[=]", key, value) == 2)
+        {
+            /* Special case for 'key =' */
+            value[0] = 0;
+        }
+        else
+        {
+            ERR("config parse error: malformed option line: \"%s\"\n\n", line);
+            continue;
+        }
+        rstrip(key);
 
-         if(curSection[0] != 0)
-         {
-             size_t len = strlen(curSection);
-             memmove(&key[len+1], key, sizeof(key)-1-len);
-             key[len] = '/';
-             memcpy(key, curSection, len);
-         }
+        if(curSection[0] != 0)
+        {
+            size_t len = strlen(curSection);
+            memmove(&key[len+1], key, sizeof(key)-1-len);
+            key[len] = '/';
+            memcpy(key, curSection, len);
+        }
 
         /* Check if we already have this option set */
         ent = cfgBlock.entries;
@@ -171,36 +288,63 @@ static void LoadConfigFromFile(FILE *f)
         }
 
         free(ent->value);
-        ent->value = strdup(value);
+        ent->value = expdup(value);
 
         TRACE("found '%s' = '%s'\n", ent->key, ent->value);
     }
+
+    free(buffer);
 }
 
+#ifdef _WIN32
 void ReadALConfig(void)
 {
-    const char *str;
+    WCHAR buffer[PATH_MAX];
+    const WCHAR *str;
     FILE *f;
 
-#ifdef _WIN32
-    if(SHGetSpecialFolderPathA(NULL, buffer, CSIDL_APPDATA, FALSE) != FALSE)
+    if(SHGetSpecialFolderPathW(NULL, buffer, CSIDL_APPDATA, FALSE) != FALSE)
     {
-        size_t p = strlen(buffer);
-        snprintf(buffer+p, sizeof(buffer)-p, "\\alsoft.ini");
+        al_string filepath = AL_STRING_INIT_STATIC();
+        al_string_copy_wcstr(&filepath, buffer);
+        al_string_append_cstr(&filepath, "\\alsoft.ini");
 
-        TRACE("Loading config %s...\n", buffer);
-        f = fopen(buffer, "rt");
+        TRACE("Loading config %s...\n", al_string_get_cstr(filepath));
+        f = al_fopen(al_string_get_cstr(filepath), "rt");
         if(f)
         {
             LoadConfigFromFile(f);
             fclose(f);
         }
+        al_string_deinit(&filepath);
     }
+
+    if((str=_wgetenv(L"ALSOFT_CONF")) != NULL && *str)
+    {
+        al_string filepath = AL_STRING_INIT_STATIC();
+        al_string_copy_wcstr(&filepath, str);
+
+        TRACE("Loading config %s...\n", al_string_get_cstr(filepath));
+        f = al_fopen(al_string_get_cstr(filepath), "rt");
+        if(f)
+        {
+            LoadConfigFromFile(f);
+            fclose(f);
+        }
+        al_string_deinit(&filepath);
+    }
+}
 #else
+void ReadALConfig(void)
+{
+    char buffer[PATH_MAX];
+    const char *str;
+    FILE *f;
+
     str = "/etc/openal/alsoft.conf";
 
     TRACE("Loading config %s...\n", str);
-    f = fopen(str, "r");
+    f = al_fopen(str, "r");
     if(f)
     {
         LoadConfigFromFile(f);
@@ -231,7 +375,7 @@ void ReadALConfig(void)
             buffer[sizeof(buffer)-1] = 0;
 
             TRACE("Loading config %s...\n", next);
-            f = fopen(next, "r");
+            f = al_fopen(next, "r");
             if(f)
             {
                 LoadConfigFromFile(f);
@@ -247,7 +391,7 @@ void ReadALConfig(void)
         snprintf(buffer, sizeof(buffer), "%s/.alsoftrc", str);
 
         TRACE("Loading config %s...\n", buffer);
-        f = fopen(buffer, "r");
+        f = al_fopen(buffer, "r");
         if(f)
         {
             LoadConfigFromFile(f);
@@ -266,19 +410,18 @@ void ReadALConfig(void)
     if(buffer[0] != 0)
     {
         TRACE("Loading config %s...\n", buffer);
-        f = fopen(buffer, "r");
+        f = al_fopen(buffer, "r");
         if(f)
         {
             LoadConfigFromFile(f);
             fclose(f);
         }
     }
-#endif
 
     if((str=getenv("ALSOFT_CONF")) != NULL && *str)
     {
         TRACE("Loading config %s...\n", str);
-        f = fopen(str, "r");
+        f = al_fopen(str, "r");
         if(f)
         {
             LoadConfigFromFile(f);
@@ -286,6 +429,7 @@ void ReadALConfig(void)
         }
     }
 }
+#endif
 
 void FreeALConfig(void)
 {
@@ -373,6 +517,16 @@ int ConfigValueFloat(const char *blockName, const char *keyName, float *ret)
 #else
     *ret = (float)strtod(val, NULL);
 #endif
+    return 1;
+}
+
+int ConfigValueBool(const char *blockName, const char *keyName, int *ret)
+{
+    const char *val = GetConfigValue(blockName, keyName, "");
+    if(!val[0]) return 0;
+
+    *ret = (strcasecmp(val, "true") == 0 || strcasecmp(val, "yes") == 0 ||
+            strcasecmp(val, "on") == 0 || atoi(val) != 0);
     return 1;
 }
 
