@@ -48,7 +48,6 @@ typedef struct {
 
     void *buffer;
     ALuint bufferSize;
-    ALuint curBuffer;
 
     ALuint frameSize;
 } osl_data;
@@ -131,13 +130,17 @@ static void opensl_callback(SLAndroidSimpleBufferQueueItf bq, void *context)
     ALvoid *buf;
     SLresult result;
 
-    buf = (ALbyte*)data->buffer + data->curBuffer*data->bufferSize;
+	SLAndroidSimpleBufferQueueState state;
+	result = VCALL(bq, GetState)(&state);
+	PRINTERR(result, "opensl_callback bq->GetState");
+
+	ALuint curBufferIndex = state.index % Device->NumUpdates;
+	buf = (ALbyte*)data->buffer + curBufferIndex*data->bufferSize;
+
     aluMixData(Device, buf, data->bufferSize/data->frameSize);
 
     result = VCALL(bq,Enqueue)(buf, data->bufferSize);
-    PRINTERR(result, "bq->Enqueue");
-
-    data->curBuffer = (data->curBuffer+1) % Device->NumUpdates;
+    PRINTERR(result, "opensl_callback bq->Enqueue");
 }
 
 
@@ -294,7 +297,7 @@ static ALCboolean opensl_reset_playback(ALCdevice *Device)
 
 static ALCboolean opensl_start_playback(ALCdevice *Device)
 {
-    osl_data *data = Device->ExtraData;
+	osl_data *data = Device->ExtraData;
     SLAndroidSimpleBufferQueueItf bufferQueue;
     SLPlayItf player;
     SLresult result;
@@ -318,6 +321,11 @@ static ALCboolean opensl_start_playback(ALCdevice *Device)
             PRINTERR(result, "calloc");
         }
     }
+
+	// Must remove and old buffers before enqueing.
+	result = VCALL0(bufferQueue, Clear)();
+	PRINTERR(result, "bufferQueue->Clear");
+
     /* enqueue the first buffer to kick off the callbacks */
     for(i = 0;i < Device->NumUpdates;i++)
     {
@@ -328,7 +336,7 @@ static ALCboolean opensl_start_playback(ALCdevice *Device)
             PRINTERR(result, "bufferQueue->Enqueue");
         }
     }
-    data->curBuffer = 0;
+
     if(SL_RESULT_SUCCESS == result)
     {
         result = VCALL(data->bufferQueueObject,GetInterface)(SL_IID_PLAY, &player);
@@ -339,7 +347,7 @@ static ALCboolean opensl_start_playback(ALCdevice *Device)
         result = VCALL(player,SetPlayState)(SL_PLAYSTATE_PLAYING);
         PRINTERR(result, "player->SetPlayState");
     }
-
+	
     if(SL_RESULT_SUCCESS != result)
     {
         if(data->bufferQueueObject != NULL)
@@ -349,10 +357,10 @@ static ALCboolean opensl_start_playback(ALCdevice *Device)
         free(data->buffer);
         data->buffer = NULL;
         data->bufferSize = 0;
-
+		
         return ALC_FALSE;
     }
-
+	
     return ALC_TRUE;
 }
 
@@ -379,6 +387,19 @@ static void opensl_stop_playback(ALCdevice *Device)
         result = VCALL0(bufferQueue,Clear)();
         PRINTERR(result, "bufferQueue->Clear");
     }
+
+	// wait for sound to stop playing so no more callback triggered.
+	SLAndroidSimpleBufferQueueState state;
+	result = VCALL(bufferQueue, GetState)(&state);
+	PRINTERR(result, "bufferQueue->GetState");
+	while (state.count > 0 && result == SL_RESULT_SUCCESS)
+	{
+		result = VCALL0(bufferQueue, Clear)();
+		PRINTERR(result, "bufferQueue->Clear (while loop)");
+
+		result = VCALL(bufferQueue, GetState)(&state);
+		PRINTERR(result, "bufferQueue->GetState (while loop)");
+	}
 
     free(data->buffer);
     data->buffer = NULL;
