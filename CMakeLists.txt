@@ -421,15 +421,18 @@ IF(NOT HAVE_STRNCASECMP)
     ADD_DEFINITIONS(-Dstrncasecmp=_strnicmp)
 ENDIF()
 
-CHECK_FUNCTION_EXISTS(snprintf HAVE_SNPRINTF)
-IF(NOT HAVE_SNPRINTF)
-    CHECK_FUNCTION_EXISTS(_snprintf HAVE__SNPRINTF)
-    IF(NOT HAVE__SNPRINTF)
-        MESSAGE(FATAL_ERROR "No snprintf function found, please report!")
-    ENDIF()
+# MSVC14 and newer define snprintf in a "proper way" as a function, so no need to remap from _snprintf to snprintf.
+ if(MSVC_VERSION LESS 1900 OR NOT MSVC) # 1900 == VS 14.0
+	CHECK_FUNCTION_EXISTS(snprintf HAVE_SNPRINTF)
+	IF(NOT HAVE_SNPRINTF)
+		CHECK_FUNCTION_EXISTS(_snprintf HAVE__SNPRINTF)
+		IF(NOT HAVE__SNPRINTF)
+			MESSAGE(FATAL_ERROR "No snprintf function found, please report!")
+		ENDIF()
 
-    ADD_DEFINITIONS(-Dsnprintf=_snprintf)
-ENDIF()
+		ADD_DEFINITIONS(-Dsnprintf=_snprintf)
+	ENDIF()
+endif(MSVC_VERSION LESS 1900 OR NOT MSVC)
 
 CHECK_SYMBOL_EXISTS(isfinite math.h HAVE_ISFINITE)
 IF(NOT HAVE_ISFINITE)
