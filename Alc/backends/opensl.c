@@ -388,19 +388,6 @@ static void opensl_stop_playback(ALCdevice *Device)
         PRINTERR(result, "bufferQueue->Clear");
     }
 
-	// wait for sound to stop playing so no more callback triggered.
-	SLAndroidSimpleBufferQueueState state;
-	result = VCALL(bufferQueue, GetState)(&state);
-	PRINTERR(result, "bufferQueue->GetState");
-	while (state.count > 0 && result == SL_RESULT_SUCCESS)
-	{
-		result = VCALL0(bufferQueue, Clear)();
-		PRINTERR(result, "bufferQueue->Clear (while loop)");
-
-		result = VCALL(bufferQueue, GetState)(&state);
-		PRINTERR(result, "bufferQueue->GetState (while loop)");
-	}
-
     free(data->buffer);
     data->buffer = NULL;
     data->bufferSize = 0;
